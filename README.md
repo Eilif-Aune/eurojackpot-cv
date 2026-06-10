@@ -198,3 +198,21 @@ python scripts/download_videos.py
 - Source video resolution (480p) is the fundamental ceiling on pipeline accuracy
 - The pipeline only handles main numbers (5/50), not the star numbers (2/12)
 - Some early draws lack fasit data in the source archive
+
+## Anti-finding: The Pipeline Bias Discovery
+
+A late-stage chi-square test found p < 0.0001 for position × ball 
+independence — apparently strong evidence that draw order contains 
+predictive information. But held-out prediction (Test 3) failed at 
+20% baseline, and filtering to perfect-detection draws (n_inferred=0) 
+made the signal completely vanish (p = 0.97).
+
+The "signal" was an artifact: `recover_draw_order` puts inferred 
+(unmatched) balls at position 5 as a fallback. Two-digit numbers 
+(10-50) are harder to detect, so they're over-represented in 
+inferred positions. This becomes a statistical signal that does 
+not generalize.
+
+This is the most methodologically important finding in the project: 
+even strong p-values demand held-out validation and sub-population 
+analysis to distinguish real effects from artifacts of measurement.
