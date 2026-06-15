@@ -1,22 +1,26 @@
-# eurojackpot-cv
-Computer vision pipeline for Eurojackpot ball detection — ML learning project
 # Eurojackpot Draw Order Recovery and Statistical Analysis
 
-A computer vision pipeline that recovers the original draw order from Eurojackpot lottery videos, combined with a rigorous statistical investigation of whether the resulting dataset contains any predictable structure.
+I built a computer vision pipeline that recovers the order in which Eurojackpot lottery balls were drawn from the official YouTube draw videos, then ran every reasonable statistical test on the resulting dataset to see if anything in the draw process is predictable.
+
+Spoiler: nothing is. But the journey of confirming that turned out to be more interesting than I expected.
 
 ## TL;DR
 
-- **Data engineering**: Built a YOLOv8-based pipeline that processes 14 years of Eurojackpot draw videos (2012–2026) and recovers the order in which balls were drawn — information that is not preserved in any public dataset.
-- **Resulting dataset**: 922 draws with reconstructed draw order. Verified at 5/5 accuracy on independent test cases. 79% of draws have at least 4 of 5 numbers directly detected.
-- **Statistical analysis**: Ten independent tests for predictable patterns. All ten returned no significant signal.
+I trained two YOLOv8 models to detect lottery balls and read the digits printed on them, wrote a video pipeline that figures out the order balls arrive in the tube, and ran it on 14 years of Eurojackpot draws (2012 to 2026). The result is a dataset of 922 draws with their original draw order, which nobody else has.
 
-This project did not find a way to predict Eurojackpot. With 14 years of data, ten independent analytical methods, and a unique draw-order dataset that no one else has, no predictable pattern was detected.
+Then I tested 13 separate hypotheses about whether the draws are predictable. None of them are.
+
+One of the tests came back with p < 0.0001, which initially looked like a real discovery. It wasn't. It was a bug in my own pipeline. Figuring out why is the most interesting thing in this project.
 
 ## Background
 
-Eurojackpot results are published as sorted numbers (e.g. `2, 17, 21, 25, 30`). The original draw order is lost in this representation. Several hypotheses about lottery predictability — conditional dependencies between consecutive draws, position-specific bias, sequence patterns — can only be tested with draw order information.
+Eurojackpot publishes results as sorted numbers, so you see "2, 17, 21, 25, 30" but you have no idea which one came out first, which came out second, and so on. The order is lost when the numbers are written down.
 
-This project recovers that lost information from publicly available draw videos using computer vision, then tests every plausible hypothesis about predictability on the resulting dataset.
+If you want to test certain hypotheses about lottery predictability, like whether consecutive draws influence each other or whether some positions favor certain numbers, you need that draw order. You cannot get it from any public dataset because nobody saves it.
+
+But the draws are filmed and posted on YouTube, so the order is sitting there in the videos, just not in machine-readable form.
+
+This project pulls the order out of the videos, builds a dataset from it, and uses that dataset to test every reasonable hypothesis I could think of.
 
 ## Pipeline Overview
 
@@ -45,9 +49,9 @@ Count-Increase Detection ────► Find when each cluster first filled
 Output: Draw Order
 ```
 
-## Computer Vision Models
+## The CV Models
 
-Two YOLOv8 models trained on hand-annotated frames from the official Eurojackpot YouTube channel.
+Two YOLOv8 models, both trained on frames I labeled by hand from the official Eurojackpot YouTube channel.
 
 | Model | Training data | Test mAP@50 |
 |-------|---------------|-------------|
@@ -56,7 +60,7 @@ Two YOLOv8 models trained on hand-annotated frames from the official Eurojackpot
 
 ## Draw Order Recovery
 
-The key insight: balls are added to the tube one at a time during the draw. By tracking when each cluster position becomes "stably filled," we can infer the order of arrival.
+The trick is that balls arrive in the tube one at a time during the draw. If you can detect when each tube position first gets stably filled, you know the order they arrived in.
 
 ```python
 def recover_draw_order(video_path, fasit):
@@ -80,7 +84,7 @@ def recover_draw_order(video_path, fasit):
 
 ### Quality Distribution
 
-The pipeline reports `n_inferred` for each draw: the number of positions where the order had to be inferred rather than directly detected.
+Each draw in the dataset has an `n_inferred` field that records how many of the five positions had to be guessed (when the digit detector couldn't confidently read the ball) versus directly detected.
 
 | n_inferred | Draws | % |
 |------------|-------|---|
@@ -91,44 +95,67 @@ The pipeline reports `n_inferred` for each draw: the number of positions where t
 | 4 | 4 | 0.4% |
 | 5 (total failure) | 3 | 0.3% |
 
-**79% of draws have at minimum 4 of 5 numbers directly detected.**
+79% of draws have at least 4 of 5 numbers directly detected. The `n_inferred` field looks like a bookkeeping detail. It turned out to be the most important field in the dataset, for reasons I'll get to.
 
 ## Statistical Analysis
 
-Ten independent hypotheses about whether the draw process is predictable were tested.
+I tested 13 separate hypotheses about whether the Eurojackpot draws are predictable. They cover a wide range of approaches: frequentist tests, bootstrap methods, Markov chains, hidden state models, neural networks, and frequency-domain analysis.
 
 | # | Test | Method | Result |
 |---|------|--------|--------|
 | 1 | Marginal uniformity | Chi-square on 50 ball counts | p = 0.87 (uniform) |
 | 2 | Conditional categorical | Bootstrap chi-square | p = 0.21 (no signal) |
 | 3 | Markov chain z-scores | 50×50 transition matrix | Artifacts (Poisson asymmetry) |
-| 4 | Markov predictive accuracy | Train/test, temporal split | At baseline |
+| 4 | Markov predictive accuracy | Train/test, temporal split | At baseline (2.21% vs 1.87%) |
 | 5 | Random Forest with rich features | 14 features, temporal split | Below baseline (1.71% vs 2.11%) |
 | 6 | LSTM sequence model | 4-step input, predict 5th | Overfits, no generalization |
 | 7 | Co-occurrence z-scores | All 1225 pairs | Within noise expectation |
 | 8 | Co-occurrence predictive | Hit@K on held-out | Worse than uniform (-0.01pp) |
 | 9 | Hidden Markov Model | K=2..7 with BIC + shuffle test | Gaussian Mixture artifact |
 | 10 | Triplet/trigram patterns | Markov order 2 | Overfits, worse log-likelihood |
+| 11 | **Position × Ball independence** | **Chi-square per position** | **p < 0.0001, but it's a pipeline artifact** |
+| 12 | Per-position XGBoost + RF | 100+ features per position | All 5 positions below baseline |
+| 13 | Spectral analysis | Welch's PSD + bootstrap | Fisher p = 0.33 (white noise) |
 
-### Selected Findings
+All thirteen came back negative. But one of them came back interestingly negative.
 
-**The chi-square false alarm.** A standard parametric chi-square test on low/medium/high prev → next transitions returned p = 0.039 — apparently significant. But the four transitions within each draw are not independent observations: they share a sampling-without-replacement constraint. A bootstrap test that shuffles within draws gave p = 0.21. The parametric test was inflating significance by ignoring the correlation structure.
+### The Pipeline Artifact (Test 11)
 
-**The Markov "extreme cells."** Several cells in the 50×50 transition matrix showed z-scores > 3.0, more than expected by chance. These looked impressive but were artifacts of low expected counts (~1.5 per cell) and asymmetric Poisson distribution: cells can be much higher than expected but only slightly lower (bounded at 0). A predictive model built on these "extreme" cells performed at random level on held-out data.
+Test 11 nearly fooled me. The setup was simple: for each of the five draw positions, count how often each of the 50 balls appeared there, and run a chi-square test for independence. Under random draws, every ball should appear about equally often in every position.
 
-**The HMM Gaussian Mixture.** A Hidden Markov Model with K=7 hidden states gave dramatically better BIC than K=1, suggesting hidden temporal structure. But a shuffle test (shuffling time order before training) showed shuffled data gave **better** test log-likelihood than original. The HMM was approximating a multimodal feature distribution as a Gaussian Mixture Model — there was no temporal information being captured.
+The result was chi-square = 503, p < 0.0001. Position 5 in particular showed a striking pattern where high-numbered balls were massively over-represented in the final position. If I had stopped there and posted it, this would have looked like a real discovery about Eurojackpot.
+
+It is not a real discovery. It is a bug in my own pipeline.
+
+When the digit detector cannot confidently read a ball, the pipeline falls back to placing it at position 5. Two-digit balls (especially balls 40 and above) are harder to read than single-digit balls. The combination means: high-numbered balls fail digit detection more often, they get placed at position 5 by default, and that creates a fake correlation between ball value and final position.
+
+The fix is to filter the dataset to draws where `n_inferred = 0`, meaning no ball needed to be guessed. That leaves 354 clean draws. Re-running the same chi-square test on this subset gives chi-square = 161, p = 0.97. All five positions individually have p > 0.7. The signal is gone.
+
+This is why the `n_inferred` field matters. Without it, the original p < 0.0001 result would be impossible to distinguish from a real lottery bias. With it, the bug becomes detectable by comparing one slice of the data against another.
+
+### Other Things Worth Mentioning
+
+**The first chi-square false alarm (Test 2).** A standard parametric chi-square on prev → next transitions returned p = 0.039, which looked significant. The problem is that the four transitions within each draw are not independent observations, because they share a sampling-without-replacement constraint. A bootstrap that respects the within-draw structure gives p = 0.21. The parametric test was overstating significance by treating correlated data as independent.
+
+**The Markov extreme cells (Test 3).** Several cells in the 50×50 transition matrix had z-scores above 3.0, which is more than expected by chance. They looked like signal but were really just Poisson asymmetry. With expected counts around 1.5 per cell, you can be much higher than expected but only slightly lower, since you can never have fewer than zero events. That asymmetry creates a heavy upper tail that mimics signal. A predictive model built on these "extreme" cells performed at random level on held-out data.
+
+**The HMM Gaussian Mixture (Test 9).** An HMM with 7 hidden states had a much better BIC than a 1-state model, which initially suggested there might be hidden temporal structure in the draws. A shuffle test killed this. If I shuffle the chronological order of the draws before training the HMM, I get *better* test log-likelihood than on the real data. The HMM was approximating a multimodal feature distribution as a mixture of Gaussians. There was no actual temporal information being captured.
+
+**XGBoost doing worse than random (Test 12).** I trained one XGBoost model per draw position, each with about 100 features (recency vectors, rolling frequencies, date features, previously drawn balls). All five models scored top-1 accuracy between 1.1% and 1.7%, while the uniform random baseline is 2.0% to 2.2%. So XGBoost was systematically beaten by chance. This is what overfitting on pure noise looks like: the model finds spurious patterns in the training data that actively hurt it on the test set. The top 10 feature importances were all between 0.011 and 0.015, basically uniform, which is what you would expect if the model has nothing real to learn.
+
+**Spectral analysis (Test 13).** For each ball, I built a binary time series (1 if drawn at that draw, 0 if not) and ran Welch's power spectral density on it, then compared against a bootstrap null distribution. No ball had a peak above the 99% null threshold (0 out of 50, where you would expect 0.5 by chance). Fisher's combined test across all 50 balls gives p = 0.33. The aggregated spectrum is flat at the white-noise level expected for a Bernoulli(0.1) process. No periodicity, no seasonality, nothing.
 
 ## Predictive Model
 
-The project includes a principled predictive model that uses all available information:
+The repo includes a deterministic predictive model that uses all the available signal sources I tested:
 
-- Position-specific marginal distribution (uses draw order, not just sorted values)
-- Conditional transitions (Markov, per-position)
-- Exponential time-weighting (half-life: 365 days, recent draws weighted higher)
-- Laplace smoothing
-- Beam search for the most likely full sequence
+* Position-specific marginal distributions (not just sorted)
+* Per-position Markov transitions
+* Exponential time-weighting with a 365-day half-life
+* Laplace smoothing
+* Beam search over the full sequence
 
-This is more sophisticated than "predict the most common balls." It is also more honest: it does not perform better than random on held-out data, which is the expected result given the analytical findings.
+It's more sophisticated than just picking the most common balls. It also does not beat random on held-out data, which is the expected behavior given everything else in this project.
 
 ```python
 prediction = recover_draw_order_for_next_drawing(historical_data)
@@ -146,14 +173,10 @@ eurojackpot-cv/
 │   ├── download_videos.py            # Batch download with yt-dlp
 │   └── generate_all_urls.py          # Build complete URL list
 ├── notebooks/
-│   ├── 01_train_ball_detector.ipynb
-│   ├── 02_train_digit_detector.ipynb
-│   ├── 03_pipeline_validation.ipynb
-│   ├── 04_statistical_analysis.ipynb
-│   ├── 05_ml_models.ipynb
-│   └── 06_predictive_model.ipynb
+│   ├── 01_train_yolo.ipynb
+│   ├── 02_statistical tests
 ├── data/
-│   ├── eurojackpot_with_draw_order.parquet     # 922 draws × order + fasit
+│   ├── eurojackpot_with_draw_order.parquet     # 923 draws × order + fasit
 │   └── euro_jackpot_komplett.csv               # Fasit only
 └── models/
     ├── ball_detector/weights/best.pt
@@ -178,41 +201,37 @@ python scripts/download_videos.py
 
 ## Tech Stack
 
-- **CV**: YOLOv8 (ultralytics), OpenCV, imageio
-- **Stats / ML**: numpy, pandas, scipy, scikit-learn, TensorFlow, hmmlearn
-- **Data**: pandas, parquet
-- **Scraping**: requests + regex, yt-dlp
-- **Infrastructure**: Google Colab (T4 GPU), Google Drive
+CV: YOLOv8 (ultralytics), OpenCV, imageio.
 
-## What This Project Demonstrates
+Stats and ML: numpy, pandas, scipy (signal, stats), scikit-learn, XGBoost, TensorFlow, hmmlearn.
 
-1. **Original data engineering**: Recovering information from videos that does not exist in any public dataset
-2. **End-to-end ML pipeline**: From data acquisition through model training to inference
-3. **Statistical rigor**: Proper train/test splits, bootstrap validation, multiple-comparison awareness
-4. **Self-critical analysis**: Several apparent "findings" (Markov z-scores, HMM hidden states) were investigated and shown to be artifacts
-5. **Honest reporting**: Negative results documented with the same care positive ones would be
+Scraping: requests, regex, yt-dlp.
+
+Infrastructure: Google Colab (T4 GPU), Google Drive.
+
+## What I Learned
+
+The most useful single thing this project taught me is to be paranoid about apparent signal. Five separate things in the analysis looked at first glance like real findings:
+
+1. The parametric chi-square false alarm
+2. The Markov extreme cells
+3. The HMM hidden states
+4. The position × ball signal
+5. The XGBoost feature importances looking like they meant something
+
+Every one of them had a clean explanation that did not involve the lottery being predictable. The position × ball case is the one that scared me most, because it had the lowest p-value and would have been the easiest to misinterpret. It also taught me the value of keeping audit fields in the dataset. The fix was not subtle statistics. It was just slicing the data on `n_inferred = 0` and re-running the same test on a clean subset.
 
 ## Limitations
 
-- 922 draws may be too few to detect very weak signals if they exist
-- Source video resolution (480p) is the fundamental ceiling on pipeline accuracy
-- The pipeline only handles main numbers (5/50), not the star numbers (2/12)
-- Some early draws lack fasit data in the source archive
+* 923 draws may simply be too few to detect very weak signals if they exist
+* The video resolution (480p) is the hard ceiling on detector accuracy
+* The pipeline only handles main numbers (5 of 50), not the star numbers (2 of 12)
+* Some early draws are missing from the fasit archive
+* About 62% of position labels come from pipeline inference rather than direct detection. The `n_inferred` field lets anyone using the dataset filter to the clean 354-draw subset where this assumption is removed
 
-## Anti-finding: The Pipeline Bias Discovery
+## Wrapping Up
 
-A late-stage chi-square test found p < 0.0001 for position × ball 
-independence — apparently strong evidence that draw order contains 
-predictive information. But held-out prediction (Test 3) failed at 
-20% baseline, and filtering to perfect-detection draws (n_inferred=0) 
-made the signal completely vanish (p = 0.97).
+I spent a lot of work on a system designed to extract information that turned out to be unpredictable. That sounds like a failure, but it's actually the answer to the question I was asking. Across 13 different methods and roughly every analytical tool I know how to use, the Eurojackpot draws do not reveal any structure beyond uniform randomness.
 
-The "signal" was an artifact: `recover_draw_order` puts inferred 
-(unmatched) balls at position 5 as a fallback. Two-digit numbers 
-(10-50) are harder to detect, so they're over-represented in 
-inferred positions. This becomes a statistical signal that does 
-not generalize.
+The dataset itself is in this repo (`eurojackpot_with_draw_order.parquet`). If anyone reading this has a hypothesis they want to test, they have something nobody else does to test it on.
 
-This is the most methodologically important finding in the project: 
-even strong p-values demand held-out validation and sub-population 
-analysis to distinguish real effects from artifacts of measurement.
